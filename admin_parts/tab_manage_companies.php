@@ -81,7 +81,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 document.getElementById('modalCompanyServiceList').parentNode.insertBefore(selectedServicesDisplay, document.getElementById('modalCompanyServiceList'));
             }
             const selectedNames = allServices
-                .filter(service => linkedServices.includes(String(service.id)))
+                .filter(service => linkedServices.find(linkedId => linkedId == service.id) !== undefined)
                 .map(service => `<span class="inline-block bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-1 rounded-full mr-1 mb-1">${service.name}</span>`);
             selectedServicesDisplay.innerHTML = selectedNames.length > 0 ? selectedNames.join('') : '<span class="text-xs text-gray-500">Inga tjänster valda.</span>';
 
@@ -89,7 +89,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const serviceList = document.getElementById('modalCompanyServiceList');
             serviceList.innerHTML = '';
             allServices.forEach(service => {
-                const isChecked = linkedServices.includes(String(service.id));
+                const isChecked = linkedServices.find(linkedId => linkedId == service.id) !== undefined;
                 serviceList.innerHTML += `<li><label class="flex items-center"><input type="checkbox" name="services[]" value="${service.id}" ${isChecked ? 'checked' : ''} class="mr-2"> ${service.name}</label></li>`;
             });
 
@@ -98,7 +98,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 checkbox.addEventListener('change', function() {
                     const checkedIds = Array.from(serviceList.querySelectorAll('input[type="checkbox"]:checked')).map(cb => cb.value);
                     const updatedNames = allServices
-                        .filter(service => checkedIds.includes(String(service.id)))
+                        .filter(service => checkedIds.find(checkedId => checkedId == service.id) !== undefined)
                         .map(service => `<span class="inline-block bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-1 rounded-full mr-1 mb-1">${service.name}</span>`);
                     selectedServicesDisplay.innerHTML = updatedNames.length > 0 ? updatedNames.join('') : '<span class="text-xs text-gray-500">Inga tjänster valda.</span>';
                 });
