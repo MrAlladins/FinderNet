@@ -3,7 +3,6 @@
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
 
-// Inkludera databasanslutningen och konfigurationsfil
 require_once 'dbconn.php';
 require_once 'config.php';
 
@@ -31,9 +30,6 @@ function sendsms($sms) {
     }
 }
 
-//======================================================================
-// HANTERA INSKICKAD FÖRFRÅGAN (FORMULÄR-POST)
-//======================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $service_id = isset($_POST['service_id']) ? (int)$_POST['service_id'] : 0;
     $postal_code = isset($_POST['postal_code']) ? trim($_POST['postal_code']) : '';
@@ -43,15 +39,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $selected_tasks = isset($_POST['tasks']) ? $_POST['tasks'] : [];
     $other_description = isset($_POST['other_task_description']) ? trim($_POST['other_task_description']) : '';
     $Youtubes = isset($_POST['question']) ? $_POST['question'] : [];
+    $paket = isset($_POST['paket']) ? $_POST['paket'] : 'Standard'; // <-- NYTT
 
     if ($service_id && $postal_code && $customer_name && $customer_email) {
         try {
             $pdo->beginTransaction();
 
-            // Spara förfrågan
-            $sql_request = "INSERT INTO customer_requests (service_id, postal_code, customer_name, customer_email, customer_phone, other_task_description) VALUES (?, ?, ?, ?, ?, ?)";
+            // OBS! Lägg till $paket i din databas här om du vill spara valet
+            $sql_request = "INSERT INTO customer_requests (service_id, postal_code, customer_name, customer_email, customer_phone, other_task_description, paket) VALUES (?, ?, ?, ?, ?, ?, ?)";
             $stmt_request = $pdo->prepare($sql_request);
-            $stmt_request->execute([$service_id, $postal_code, $customer_name, $customer_email, $customer_phone, $other_description]);
+            $stmt_request->execute([$service_id, $postal_code, $customer_name, $customer_email, $customer_phone, $other_description, $paket]);
             $request_id = $pdo->lastInsertId();
 
             // Spara valda uppgifter
@@ -95,35 +92,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $sms_status = $stmt_sms_status->fetch(PDO::FETCH_ASSOC);
             $sms_enabled = ($sms_status && $sms_status['setting_value'] === 'active');
 
-            // Hämta kvalificerade företag (för lista)
-            $postal_area_code = substr($postal_code, 0, 3); // T.ex. "922" från "92231"
+            // Hämta kvalificerade företag
+            $postal_area_code = substr($postal_code, 0, 3);
 
-            /*
-            // ========================================================== //
-            // ---- GAMMAL, STRIKT LOGIK (BORTKOMMENTERAD) ----
-            // ========================================================== //
-            $sql_companies = "
-                SELECT DISTINCT c.id, c.company_name, c.contact_phone, c.credits
-                FROM companies c
-                JOIN company_services cs ON c.id = cs.company_id
-                JOIN company_operating_areas coa ON c.id = coa.company_id
-                JOIN company_subscriptions sub ON c.id = sub.company_id
-                WHERE cs.service_id = ?
-                AND coa.postal_area_code = ?
-                AND c.sms_notifications_enabled = 1
-                AND sub.service_name = 'sms_notifications'
-                AND sub.status = 'active'
-                AND c.credits >= 1
-                AND c.status = 'active'
-            ";
-            $stmt_companies = $pdo->prepare($sql_companies);
-            $stmt_companies->execute([$service_id, $postal_area_code]);
-            $companies = $stmt_companies->fetchAll(PDO::FETCH_ASSOC);
-            */
-
-            // ========================================================== //
-            // ---- NY, FÖRENKLAD LOGIK (AKTIV) ----
-            // ========================================================== //
             $sql_companies = "
                 SELECT DISTINCT c.id, c.company_name, c.contact_phone
                 FROM companies c
@@ -137,33 +108,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt_companies->execute([$service_id, $postal_area_code]);
             $companies = $stmt_companies->fetchAll(PDO::FETCH_ASSOC);
 
-            // Logga företagsresultat för felsökning
-            if (!empty($companies)) {
-                error_log("Hittade " . count($companies) . " företag för service_id {$service_id} och postal_area_code {$postal_area_code}: " . json_encode($companies, JSON_PRETTY_PRINT));
-            } else {
-                error_log("Inga kvalificerade företag hittades för service_id {$service_id} och postal_area_code {$postal_area_code}");
-
-                // Felsök varje villkor i SQL-frågan
-                $sql_check_services = "SELECT COUNT(*) as count FROM company_services WHERE service_id = ?";
-                $stmt_check_services = $pdo->prepare($sql_check_services);
-                $stmt_check_services->execute([$service_id]);
-                $services_count = $stmt_check_services->fetch(PDO::FETCH_ASSOC)['count'];
-                error_log("Felsökning: Hittade $services_count tjänster för service_id {$service_id}");
-
-                $sql_check_areas = "SELECT COUNT(*) as count FROM company_operating_areas WHERE postal_area_code = ?";
-                $stmt_check_areas = $pdo->prepare($sql_check_areas);
-                $stmt_check_areas->execute([$postal_area_code]);
-                $areas_count = $stmt_check_areas->fetch(PDO::FETCH_ASSOC)['count'];
-                error_log("Felsökning: Hittade $areas_count områden för postal_area_code {$postal_area_code}");
-                
-                $sql_check_status = "SELECT COUNT(*) as count FROM companies WHERE status = 'active'";
-                $stmt_check_status = $pdo->prepare($sql_check_status);
-                $stmt_check_status->execute();
-                $status_count = $stmt_check_status->fetch(PDO::FETCH_ASSOC)['count'];
-                error_log("Felsökning: Hittade $status_count företag med status = 'active'");
-            }
-
-            // Förbered företagslista och resultatmeddelande för tack-sidan
             $notified_companies = [];
             $companies_result_message = !empty($companies) ? "Hittade " . count($companies) . " företag: " . implode(", ", array_column($companies, 'company_name')) : "Inga företag hittades för service_id {$service_id} och postnummer {$postal_code}.";
             if (!empty($companies)) {
@@ -171,7 +115,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $sms_sent = false;
                     $sms_error = $sms_enabled ? 'SMS ej skickat (okänd anledning)' : 'SMS-funktion pausad globalt';
                     if ($sms_enabled) {
-                        // Skicka SMS till hårdkodat nummer
                         $message_body = "Ny förfrågan #{$request_id}: {$service_name}, {$customer_name}, {$postal_code}. Kontakt: {$customer_email}";
                         $sms = [
                             "from" => "FinderNet",
@@ -182,7 +125,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $sms_status = $sms_result['status'];
                         $sms_error_detail = $sms_result['status'] === 'failed' ? $sms_result['error'] : null;
 
-                        // Logga SMS-försöket
                         try {
                             $sql_sms_log = "INSERT INTO sms_log (company_id, request_id, phone_number, message_body, status, error_message) VALUES (?, ?, ?, ?, ?, ?)";
                             $stmt_sms_log = $pdo->prepare($sql_sms_log);
@@ -194,7 +136,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 $sms_error = $sms_error_detail;
                             }
                         } catch (PDOException $e) {
-                            error_log("Misslyckades att logga SMS i sms_log: " . $e->getMessage());
                             $sms_error = 'Fel vid loggning av SMS';
                         }
                     }
@@ -207,24 +148,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
 
             $pdo->commit();
-            // Tack-meddelande med ort
             $success_message = "Tack för din förfrågan! Företag som är aktiva i {$city} kommer kontakta dig inom kort.";
 
         } catch (PDOException $e) {
             $pdo->rollBack();
             $error_message = "Ett tekniskt fel inträffade. Försök igen senare.";
-            error_log("PDOException in questions.php: " . $e->getMessage());
         }
     } else {
         $error_message = "Vänligen fyll i alla obligatoriska fält.";
     }
 }
 
-//======================================================================
-// HÄMTA DATA FÖR ATT VISA SIDAN (GET)
-//======================================================================
 $service_id = isset($_GET['service_id']) ? (int)$_GET['service_id'] : 0;
-$service_name = 'Okänd tjänst'; // Fallback-värde för att undvika odefinierad variabel
+$service_name = 'Okänd tjänst'; 
 if ($service_id === 0) { die("Ingen tjänst vald."); }
 try {
     $stmt_service = $pdo->prepare("SELECT name FROM services WHERE id = ?");
@@ -303,6 +239,14 @@ try {
         .companies-result { margin-bottom: 20px; color: #333; font-size: 1.1em; }
         .companies-result.success { color: #28a745; }
         .companies-result.empty { color: #dc3545; }
+        /* Paketkort-stil */
+        .package-choice { display: flex; gap: 20px; margin-bottom: 20px;}
+        .package-card { flex: 1; border: 2px solid #ccc; border-radius: 12px; padding: 20px; cursor: pointer; background: #fafafa; transition: border-color 0.2s, box-shadow 0.2s; box-shadow: 0 2px 4px rgba(0,0,0,0.04); position: relative; }
+        .package-card.selected { border-color: #2e7d32; box-shadow: 0 4px 12px rgba(46,125,50,0.10); background: #e8f5e9; }
+        .package-radio { position: absolute; top: 20px; right: 20px; }
+        .package-title { font-size: 1.2em; font-weight: bold; margin-bottom: 4px; }
+        .package-desc { font-size: 0.97em; }
+        .package-badge { display: inline-block; padding: 2px 7px; border-radius: 7px; background: #388e3c; color: #fff; font-size: 0.8em; margin-left: 7px; }
     </style>
 </head>
 <body>
@@ -410,20 +354,42 @@ try {
             <label for="other_task_description">Annan beskrivning (om det du söker saknas)</label>
             <textarea id="other_task_description" name="other_task_description" rows="4"></textarea>
         </div>
+
+        <!-- PAKETVAL (STANDARD/PREMIUM) -->
+        <div class="package-choice">
+          <label class="package-card" id="card-standard">
+            <input type="radio" class="package-radio" name="paket" value="Standard" checked>
+            <div class="package-title">Standard</div>
+            <div class="package-desc">Vanlig hantering av din förfrågan.<br>Snabb och enkel process.</div>
+          </label>
+          <label class="package-card" id="card-premium">
+            <input type="radio" class="package-radio" name="paket" value="Premium">
+            <div class="package-title">
+              Premium
+              <span class="package-badge">Gratis projektledare</span>
+            </div>
+            <div class="package-desc">
+              Välj Premium för att få en <b>personlig projektledare</b> som håller ihop hela ditt uppdrag – <span style="color:#388e3c;font-weight:600;">helt utan extra kostnad!</span>
+            </div>
+          </label>
+        </div>
+        <!-- /PAKETVAL -->
+
         <button type="submit" class="button">Skicka förfrågan</button>
     </form>
     <?php endif; ?>
 </div>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    // Postort-uppslagning
     const postalCodeInput = document.getElementById('postal_code');
     const cityResultDiv = document.getElementById('city-lookup-result');
     const checkIcon = document.getElementById('check-icon');
     let debounceTimer;
     postalCodeInput.addEventListener('input', function() {
         clearTimeout(debounceTimer);
-        const postalCode = this.value.replace(/[^0-9]/g, ''); // Tillåt bara siffror
-        this.value = postalCode; // Uppdatera fältet med rensat värde
+        const postalCode = this.value.replace(/[^0-9]/g, '');
+        this.value = postalCode;
         debounceTimer = setTimeout(() => {
             if (postalCode.length === 5) {
                 fetch(`get_city.php?postal_code=${postalCode}`)
@@ -431,23 +397,32 @@ document.addEventListener('DOMContentLoaded', function() {
                     .then(data => {
                         if (data.city) {
                             cityResultDiv.textContent = data.city;
-                            checkIcon.style.display = 'inline-block'; // Visa bocken
+                            checkIcon.style.display = 'inline-block';
                         } else {
                             cityResultDiv.textContent = 'Okänd postort';
-                            checkIcon.style.display = 'none'; // Dölj bocken
+                            checkIcon.style.display = 'none';
                         }
                     })
                     .catch(error => {
-                        console.error('Error fetching city:', error);
                         cityResultDiv.textContent = '';
                         checkIcon.style.display = 'none';
                     });
             } else {
-                cityResultDiv.textContent = ''; // Rensa om postnumret inte är 5 siffror
-                checkIcon.style.display = 'none'; // Dölj bocken
+                cityResultDiv.textContent = '';
+                checkIcon.style.display = 'none';
             }
         }, 300);
     });
+
+    // Kortval för paket
+    document.querySelectorAll('.package-card').forEach(card => {
+      card.addEventListener('click', function(e) {
+        document.querySelectorAll('.package-card').forEach(c => c.classList.remove('selected'));
+        this.classList.add('selected');
+        this.querySelector('input[type=radio]').checked = true;
+      });
+    });
+    document.getElementById('card-standard').classList.add('selected');
 });
 </script>
 </body>
